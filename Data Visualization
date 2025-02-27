@@ -1,0 +1,189 @@
+# Install and load necessary packages
+install.packages("Seurat")
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+
+# 1. Data Loading & Initialization -------------------------------------------
+
+# Load raw count data and metadata directly from CSV files
+raw_counts <- read.csv("C:\\Users\\Ermias\\Documents\\data visualization\\scRNA.file\\FACS\\pancreas_counts.csv", row.names = 1)
+metadata <- read.csv("C:\\Users\\Ermias\\Desktop\\seurat.project\\scRNA.file\\metadata_FACS.csv", row.names = 1)
+
+# Convert raw_counts to a matrix (if it's a data frame)
+raw_counts <- as.matrix(raw_counts)
+
+# Optionally, ensure no underscores in feature names
+rownames(raw_counts) <- gsub("_", "-", rownames(raw_counts))
+
+# Create Seurat object
+pancreas <- CreateSeuratObject(counts = raw_counts, 
+                               project = "pancreas_study", 
+                               min.cells = 3, 
+                               min.features = 200)
+
+# Check metadata and Seurat object consistency
+if (length(rownames(metadata)) != length(colnames(pancreas))) {
+  stop("Metadata and Seurat object have different number of cells.")
+}
+
+# Assuming the column to be used as row names is "cell_id" (replace with actual column name)
+rownames(metadata) <- metadata$cell_id
+metadata$cell_id <- NULL  # Optionally remove this column if it's no longer needed
+
+# Reorder metadata to match Seurat object column names
+metadata <- metadata[match(colnames(pancreas), rownames(metadata)), ]
+rownames(metadata) <- colnames(pancreas)
+
+# Add metadata to Seurat object
+pancreas <- AddMetaData(pancreas, metadata = metadata)
+
+# Select tissue with 2 or more sub-tissues
+head(pancreas@meta.data)
+selected_tissue <- pancreas@meta.data %>% filter(!is.na(subtissue) & subtissue >= 2)
+
+### 2. Quality Control Metrics -------------------------------------------------
+
+# Calculate percentage of mitochondrial genes
+pancreas[["percent.mt"]] <- PercentageFeatureSet(pancreas, pattern = "^MT-")
+
+# Visualize QC metrics
+VlnPlot(pancreas, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# Feature correlation plots
+plot1 <- FeatureScatter(pancreas, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pancreas, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+
+# Filter cells based on QC metrics
+pancreas <- subset(pancreas, subset = nFeature_RNA > 200 & 
+                     nFeature_RNA < 2500 & 
+                     percent.mt < 5)
+
+### 3. Data Processing ---------------------------------------------------------
+
+# Normalize data and find variable features
+pancreas <- NormalizeData(pancreas)
+pancreas <- FindVariableFeatures(pancreas, selection.method = "vst", nfeatures = 2000)
+
+# Remove rows with zero or negative values for the x-axis variable (e.g., nCount_RNA)
+clean_data <- subset(pancreas@meta.data, nCount_RNA > 0)
+
+# Visualize data using ggplot2
+plot1 <- ggplot(clean_data, aes(x = nCount_RNA, y = nFeature_RNA)) + 
+  geom_point() +
+  scale_x_log10(labels = scales::comma, limits = c(1, NA)) +
+  theme_minimal()
+plot2 <- ggplot(clean_data, aes(x = nCount_RNA, y = nFeature_RNA)) + 
+  geom_point() +
+  scale_x_log10(labels = scales::comma, limits = c(1, NA)) +
+  theme_minimal()
+plot1 + plot2
+
+# Log-transformation of positive values
+data_matrix <- GetAssayData(pancreas, slot = "data")
+positive_data <- data_matrix[data_matrix > 0]
+log_transformed_data <- log10(positive_data)
+log_transformed_df <- as.data.frame(log_transformed_data)
+colnames(log_transformed_df) <- c("value")
+
+# Visualize log-transformed data
+plot1 <- ggplot(log_transformed_df, aes(x = 1:nrow(log_transformed_df), y = value)) + 
+  geom_point() + 
+  scale_x_log10()
+plot2 <- ggplot(log_transformed_df, aes(x = 1:nrow(log_transformed_df), y = value)) + 
+  geom_line() + 
+  scale_x_log10()
+combined_plot <- plot1 + plot2
+combined_plot
+
+### 4. Scaling and Dimensionality Reduction -------------------------------------
+
+# Scale data and run PCA
+all.genes <- rownames(pancreas)
+pancreas <- ScaleData(pancreas, features = all.genes)
+pancreas <- RunPCA(pancreas, features = VariableFeatures(object = pancreas))
+
+# Examine PCA results
+VizDimLoadings(pancreas, dims = 1:2, reduction = "pca")
+DimPlot(pancreas, reduction = "pca") + NoLegend()
+
+# Determine significant PCs
+ElbowPlot(pancreas)
+
+### 5. Clustering and UMAP -----------------------------------------------------
+
+# Perform clustering and UMAP
+pancreas <- FindNeighbors(pancreas, dims = 1:10)
+pancreas <- FindClusters(pancreas, resolution = 0.5)
+pancreas <- RunUMAP(pancreas, dims = 1:10)
+
+# Visualize clusters
+DimPlot(pancreas, reduction = "umap", label = TRUE)
+
+### 6. Gender-Based UMAP Analysis ----------------------------------------------
+
+# Ensure gender information is correctly specified
+table(pancreas@meta.data$mouse.sex)
+pancreas@meta.data$mouse.sex[pancreas@meta.data$mouse.id == "specific_mouse_id"] <- "male"
+
+# Visualize gender distribution in UMAP
+DimPlot(pancreas, group.by = "mouse.sex", reduction = "umap",
+        cols = c("male" = "#1f77b4", "female" = "#ff7f0e")) +
+  ggtitle("Gender Distribution")
+
+# Define gender percentage for barplot
+gender_percent <- table(pancreas@meta.data$mouse.sex)
+
+# Corrected barplot for gender distribution by cluster
+barplot(gender_percent, beside = TRUE, 
+        col = RColorBrewer::brewer.pal(length(gender_percent), "Set2"),
+        main = "Gender Distribution by Cluster",
+        xlab = "Clusters",
+        ylab = "Percentage",
+        legend.text = TRUE,
+        args.legend = list(title = "Gender", x = "topright", cex = 0.8))
+
+### 7. Differential Expression Analysis Between Sub-Tissues -----------------
+
+# Example tissue and subtissue information (replace with actual data)
+tissue_info <- rep(c("TissueType1", "TissueType2"), length.out = nrow(pancreas@meta.data))
+subtissue_info <- rep(c("SubtissueType1", "SubtissueType2"), length.out = nrow(pancreas@meta.data))
+
+# Ensure the lengths match the number of cells
+if (length(tissue_info) == nrow(pancreas@meta.data) && length(subtissue_info) == nrow(pancreas@meta.data)) {
+  pancreas$tissue <- tissue_info
+  pancreas$subtissue <- subtissue_info
+} else {
+  stop("Length of tissue_info or subtissue_info vector does not match the number of cells.")
+}
+
+# Create subsets for differential expression analysis
+subtissue1 <- subset(pancreas, subset = subtissue == "SubtissueType1")
+subtissue2 <- subset(pancreas, subset = subtissue == "SubtissueType2")
+
+# Extract cell identities for sub-tissues
+ident1 <- WhichCells(pancreas, expression = subtissue == "SubtissueType1")
+ident2 <- WhichCells(pancreas, expression = subtissue == "SubtissueType2")
+
+# Perform differential expression analysis
+markers_subtissues <- FindMarkers(pancreas, ident.1 = ident1, ident.2 = ident2, min.pct = 0.25, logfc.threshold = 0.25)
+
+# Heatmap for marker genes between sub-tissues
+top_genes <- rownames(markers_subtissues[1:20, ])
+DoHeatmap(pancreas, features = top_genes) + NoLegend()
+
+### 8. Save Results -----------------------------------------------------------
+
+# Save the processed Seurat object and differential expression results
+saveRDS(pancreas, file = "pancreas_processed.rds")
+write.csv(markers_subtissues, "pancreas_markers.csv")
+
+# Save UMAP plot as PDF
+ggsave("pancreas_umap.pdf", 
+       plot = DimPlot(pancreas, reduction = "umap", label = TRUE),
+       width = 10, height = 8, dpi = 300)
+
+# Display session info
+sessionInfo()
