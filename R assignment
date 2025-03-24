@@ -1,0 +1,33 @@
+makeCacheMatrix <- function(x = matrix()) {
+    inv <- NULL  # Cache for inverse
+    
+    set <- function(y) {
+        if (!is.matrix(y)) stop("Input must be a matrix")  # Validate input
+        x <<- y
+        inv <<- NULL  # Reset cache
+    }
+    
+    get <- function() x  # Retrieve matrix
+    setInverse <- function(inverse) inv <<- inverse  # Cache inverse
+    getInverse <- function() inv  # Retrieve cached inverse
+    
+    list(set = set, get = get, setInverse = setInverse, getInverse = getInverse)
+}
+
+cacheSolve <- function(x, ...) {
+    inv <- x$getInverse()
+    
+    if (!is.null(inv)) {
+        message("Getting cached inverse")
+        return(inv)
+    }
+    
+    mat <- x$get()
+    
+    if (nrow(mat) != ncol(mat)) stop("Matrix must be square")  # Ensure it's a square matrix
+    if (det(mat) == 0) stop("Matrix is singular and cannot be inverted")  # Check invertibility
+    
+    inv <- solve(mat, ...)  # Compute inverse
+    x$setInverse(inv)  # Cache inverse
+    inv
+}
