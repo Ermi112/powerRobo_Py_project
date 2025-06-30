@@ -1,0 +1,260 @@
+```{r}
+if(!require("DESeq2"))
+  BiocManager::install("DESeq2","apeglm")
+BiocManager::install("apeglm")
+install.packages("tidyverse")
+library(DESeq2)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ggplot2)
+library(magrittr)
+library("apeglm")
+```
+
+
+
+```{r}
+count_matrix<- read.delim("C:\\Users\\Ermias\\Documents\\data visualization\\R_project\\GSE58135.countmatrix.txt",
+                          row.names = 1,sep = ",")
+anno<- read.delim("C:\\Users\\Ermias\\Documents\\data visualization\\R_project\\SraRunTable_GSE58135.pam50.txt",
+                  row.names = 1,sep = ",")
+```
+
+
+
+
+
+```{r}
+count_matrix<-count_matrix[,rownames(anno)]
+rownames(anno) <- colnames(count_matrix)
+```
+
+
+
+
+```{r}
+dds <-DESeqDataSetFromMatrix(countData = count_matrix,
+                             colData = anno,
+                             design = ~ source_name)
+```
+
+
+
+```{r}
+dds
+```
+
+
+
+```{r}
+as_tibble(assay(dds), rownames = "source_name") %>%
+  pivot_longer(names_to = "sample", values_to = "counts", cols = 2:7) %>% 
+  ggplot(aes(x = log2(counts + 1), fill = sample)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~ sample)
+```
+
+
+
+
+```{r}
+dds <- dds[rowSums(assay(dds)) > 0,]
+dim(dds)
+```
+
+
+
+```{r}
+dds <- DESeq(dds)
+```
+
+
+```{r}
+vsd <- vst(dds, blind = TRUE)
+
+```
+
+
+
+
+```{r}
+plotPCA(vsd,intgroup="source_name")
+```
+
+
+
+
+```{r}
+pca_data <- plotPCA(vsd,intgroup="source_name",returnData=TRUE)
+```
+
+
+
+```{r}
+ggplot(pca_data,aes(x = PC1 , y= PC2,color = "source_name",label = name))+
+  geom_point()+
+  geom_text()
+```
+
+
+
+
+
+```{r}
+sizeFactors(dds)
+```
+
+
+
+```{r}
+plotDispEsts(dds)
+```
+
+
+
+```{r}
+resultsNames(dds)
+```
+
+
+```{r}
+dds$source_name
+```
+
+
+```{r}
+dds$source_name <- relevel(dds$source_name, ref="ER+ Breast Cancer Primary Tumor")
+dds <- DESeq(dds)
+resultsNames(dds)
+```
+
+
+```{r}
+res <- results(dds,
+               name="source_name_Normal_vs_ER..Breast.Cancer.Primary.Tumor")
+```
+
+
+```{r}
+res <- results(dds,
+               contrast=c("source_name","Normal","ER+ Breast Cancer Primary Tumor"))
+```
+
+
+```{r}
+res_tbl <- as.tibble(res, rownames="ENSEMBL")
+res_tbl
+```
+
+#How Inspect the results table and identify the 5 “best genes” showing the lowest padjusted value
+
+```{r}
+res_tbl %>%
+  arrange(padj) %>%
+  head(5)
+```
+
+
+```{r}
+best_genes <- res_tbl %>%
+  arrange(padj) %>%
+  head(5) %>%pull(ENSEMBL)
+
+rowMeans(counts(dds[best_genes],normalize = TRUE))
+```
+
+
+
+```{r}
+metadata(res)$filterThreshold
+```
+
+
+```{r}
+as_tibble(metadata(res)$filterNumRej) %>%
+  ggplot(aes(x = theta, y = numRej)) +
+  geom_point() +
+  geom_vline(xintercept = 0.136,
+             color = 'red')
+```
+
+
+
+```{r}
+hist(res_tbl$pvalue)
+```
+
+
+```{r}
+res_tbl %>%
+  filter(pvalue >0.57 & pvalue <0.6) %>%
+  head(12)
+```
+
+
+```{r}
+res_tbl %>%
+  filter(pvalue >0.57 & pvalue <0.6)%>%
+  dplyr::select(padj) %>%
+  summary()
+```
+
+```{r}
+res_tbl %>%
+  filter(baseMean >metadata(res)$filterThreshold) %>%
+  pull(padj) %>%
+  hist()
+```
+
+
+```{r}
+plotMA(res)
+```
+
+
+```{r}
+res_tbl %>%
+  filter(!is.na(padj)) %>%
+  ggplot(aes(x = log2FoldChange, y = -log10(padj),
+             color = padj < 0.05 & abs(log2FoldChange) > 1)) +
+  scale_colour_manual(values = c("gray", "red")) +
+  geom_point(size = 0.5) +
+  geom_hline(yintercept = -log10(0.05)) +
+  geom_vline(xintercept = 1) +
+  geom_vline(xintercept = -1) +
+  theme(legend.position = "bottom")
+```
+
+
+
+
+```{r}
+
+res_shr <- lfcShrink(dds, coef = "source_name_Normal_vs_ER..Breast.Cancer.Primary.Tumor")
+res_shr_tbl <- as_tibble(res_shr, rownames = "ENSEMBL")
+# Original MA plot
+fig1 <- ggplot(res_tbl, aes(x = baseMean, y = log2FoldChange)) +
+  geom_point(data = res_tbl, alpha = 0.2) +
+  scale_x_log10() +
+  geom_hline(yintercept = 0) +
+  ggtitle("MA plot with original logFC values")
+
+print(fig1)
+
+# Shrunk MA plot
+fig2 <- ggplot(res_shr_tbl, aes(x = baseMean, y = log2FoldChange)) +
+  geom_point(data = res_shr_tbl, alpha = 0.2) +
+  scale_x_log10() +
+  geom_hline(yintercept = 0) +
+  ylab("shrunked log2FoldChange") +
+  ggtitle("MA plot with shrunked logFC values")
+
+
+print(fig2)
+
+```
+
+
+
