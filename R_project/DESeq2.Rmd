@@ -1,0 +1,180 @@
+```{r}
+if(!require("DESeq2"))
+  BiocManager::install("DESeq2")
+install.packages("tidyverse")
+library(DESeq2)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ggplot2)
+library(magrittr)
+```
+
+
+
+```{r}
+count_matrix<- read.delim("C:\\Users\\Ermias\\Documents\\data visualization\\R_project\\GSE58135.countmatrix.txt",
+                          row.names = 1,sep = ",")
+anno<- read.delim("C:\\Users\\Ermias\\Documents\\data visualization\\R_project\\SraRunTable_GSE58135.pam50.txt",
+                  row.names = 1,sep = ",")
+```
+
+
+
+
+
+```{r}
+count_matrix<-count_matrix[,rownames(anno)]
+rownames(anno) <- colnames(count_matrix)
+```
+
+
+
+
+```{r}
+dds <-DESeqDataSetFromMatrix(countData = count_matrix,
+                             colData = anno,
+                             design = ~ source_name)
+```
+
+
+
+```{r}
+dds
+```
+
+
+
+```{r}
+as_tibble(assay(dds), rownames = "source_name") %>%
+  pivot_longer(names_to = "sample", values_to = "counts", cols = 2:7) %>% 
+  ggplot(aes(x = log2(counts + 1), fill = sample)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~ sample)
+```
+
+
+
+
+```{r}
+dds <- dds[rowSums(assay(dds)) > 0,]
+dim(dds)
+```
+
+
+
+```{r}
+dds <- DESeq(dds)
+```
+
+
+```{r}
+vsd <- vst(dds, blind = TRUE)
+
+```
+
+
+
+
+```{r}
+plotPCA(vsd,intgroup="source_name")
+```
+
+
+
+
+```{r}
+pca_data <- plotPCA(vsd,intgroup="source_name",returnData=TRUE)
+```
+
+
+
+```{r}
+ggplot(pca_data,aes(x = PC1 , y= PC2,color = "source_name",label = name))+
+  geom_point()+
+  geom_text()
+```
+
+
+
+
+
+```{r}
+sizeFactors(dds)
+```
+
+
+
+```{r}
+plotDispEsts(dds)
+```
+
+
+
+```{r}
+resultsNames(dds)
+```
+
+
+```{r}
+dds$source_name
+```
+
+
+```{r}
+dds$source_name <- relevel(dds$source_name, ref="ER+ Breast Cancer Primary Tumor")
+dds <- DESeq(dds)
+resultsNames(dds)
+```
+
+
+```{r}
+res <- results(dds,
+               name="source_name_Name_vs_ER..Breast.Cancer.Primary.Tumor")
+```
+
+
+```{r}
+res <- results(dds,
+               contrast=c("source_name","Normal","ER+ Breast Cancer Primary Tumor"))
+```
+
+
+```{r}
+res_tbl <- as.tibble(res, rownames="ENSEMBL")
+res_tbl
+```
+
+#How Inspect the results table and identify the 5 “best genes” showing the lowest padjusted value
+
+```{r}
+res_tbl %>%
+  arrange(padj) %>%
+  head(5)
+```
+
+
+```{r}
+best_genes <- res_tbl %>%
+  arrange(padj) %>%
+  head(5) %>%pull(ENSEMBL)
+
+rowMeans(count_matrix(dds[best_genes],normalize = TRUE))
+```
+
+
+
+```{r}
+metadata(res)$filterTrhroshold
+```
+
+
+
+```{r}
+as.tibble(metadata(res)$filterNumRej)%>%
+  ggplot(aes(x= theta,y =numRej))+
+  geom_point()+
+  geo_vline()
+```
+
